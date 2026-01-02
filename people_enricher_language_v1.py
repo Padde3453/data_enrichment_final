@@ -26,7 +26,7 @@ except Exception:
 # Load Key.env first (if present), then fallback to .env.
 # If python-dotenv isn't installed, do a simple fallback parser.
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv  # type: ignore
     load_dotenv("Key.env")
     load_dotenv()
 except Exception:
@@ -71,6 +71,9 @@ LLM_MAX_PAGES = 2  # limit number of pages to send to LLM per site to reduce cal
 # Output language/tone (applies ONLY to Salutation (col H) and Icebreaker sentence (col L))
 ENRICH_LANGUAGE = os.getenv("ENRICH_LANGUAGE", "es").strip().lower() # Allowed languages: de | fr | it | es
 TONE = os.getenv("TONE", "formal").strip().lower() # Allowed tones: formal | informal
+
+# Feature Toggles
+ENABLE_ICEBREAKER = os.getenv("ENABLE_ICEBREAKER", "true").strip().lower() == "true" # Set ENABLE_ICEBREAKER=false in .env to disable icebreaker generation
 
 
 # LLM config
@@ -290,38 +293,23 @@ def get_icebreaker_prompts(lang: str, tone: str) -> Tuple[str, str]:
 def print_run_config():
     """Print key configs and a short safety confirmation banner."""
     lang, tone = validate_language_and_tone(ENRICH_LANGUAGE, TONE)
-    cfg = {
-        "EXCEL_PATH": EXCEL_PATH,
-        "INPUT_SHEET_NAME": INPUT_SHEET_NAME,
-        "OUTPUT_SHEET_NAME": OUTPUT_SHEET_NAME,
-        "MODEL_NAME": MODEL_NAME,
-        "ENRICH_LANGUAGE": lang,
-        "TONE": tone,
-        "HEADLESS": HEADLESS,
-        "IGNORE_ROBOTS": IGNORE_ROBOTS,
-        "STRICT_DOMAIN_ONLY": STRICT_DOMAIN_ONLY,
-        "NAV_TIMEOUT_MS": NAV_TIMEOUT_MS,
-        "PAGE_TIMEOUT_S": PAGE_TIMEOUT_S,
-        "DOMAIN_TIMEOUT_S": DOMAIN_TIMEOUT_S,
-        "MAX_ROWS_TO_PROCESS": MAX_ROWS_TO_PROCESS,
-        "LLM_MAX_PAGES": LLM_MAX_PAGES,
-        "MAX_PAGE_TEXT_CHARS": MAX_PAGE_TEXT_CHARS,
-        "MAX_LLM_CALLS_PER_MIN": MAX_LLM_CALLS_PER_MIN,
-        "POST_COMPANY_SLEEP_S": POST_COMPANY_SLEEP_S,
-        "VERBOSE": VERBOSE,
-    }
+    
+    # Selected config items to display
+    cfg_display = [
+        ("EXCEL_PATH", EXCEL_PATH),
+        ("INPUT_SHEET_NAME", INPUT_SHEET_NAME),
+        ("OUTPUT_SHEET_NAME", OUTPUT_SHEET_NAME),
+        ("MODEL_NAME", MODEL_NAME),
+        ("ENRICH_LANGUAGE", lang),
+        ("TONE", tone),
+        ("ICEBREAKER_ACTIVE", ENABLE_ICEBREAKER),
+        ("VERBOSE", VERBOSE),
+    ]
+
     print("\n[config] Run configuration")
     print("[config] " + "-" * 60)
-    for k in [
-        "EXCEL_PATH", "INPUT_SHEET_NAME", "OUTPUT_SHEET_NAME",
-        "MODEL_NAME", "ENRICH_LANGUAGE", "TONE",
-        "HEADLESS", "IGNORE_ROBOTS", "STRICT_DOMAIN_ONLY",
-        "NAV_TIMEOUT_MS", "PAGE_TIMEOUT_S", "DOMAIN_TIMEOUT_S",
-        "MAX_ROWS_TO_PROCESS", "LLM_MAX_PAGES",
-        "MAX_PAGE_TEXT_CHARS", "MAX_LLM_CALLS_PER_MIN",
-        "POST_COMPANY_SLEEP_S", "VERBOSE",
-    ]:
-        print(f"[config] {k}: {cfg[k]}")
+    for k, v in cfg_display:
+        print(f"[config] {k}: {v}")
     print("[config] " + "-" * 60 + "\n")
 
 
@@ -1184,18 +1172,23 @@ def process_site(site_url: str, company_name: str, llm: LLMClient, wb) -> int:
 
         # Icebreaker sentence (plain text, no JSON)
         icebreaker_sentence = ""
-        try:
-            ice_sys, ice_user_tmpl = get_icebreaker_prompts(ENRICH_LANGUAGE, TONE)
-            raw = llm_chat_text(
-                llm,
-                ice_sys,
-                ice_user_tmpl.format(site_url=site_url, homepage_text=h_text),
-            )
-            icebreaker_sentence = normalize_spaces(raw.strip().strip('"').strip("'"))
-        except Exception:
+        if ENABLE_ICEBREAKER:
+            try:
+                ice_sys, ice_user_tmpl = get_icebreaker_prompts(ENRICH_LANGUAGE, TONE)
+                raw = llm_chat_text(
+                    llm,
+                    ice_sys,
+                    ice_user_tmpl.format(site_url=site_url, homepage_text=h_text),
+                )
+                icebreaker_sentence = normalize_spaces(raw.strip().strip('"').strip("'"))
+            except Exception:
+                if VERBOSE:
+                    print("[info] Icebreaker text fetch failed; leaving empty.")
+                icebreaker_sentence = ""
+        else:
             if VERBOSE:
-                print("[info] Icebreaker text fetch failed; leaving empty.")
-            icebreaker_sentence = ""
+                print("[info] Icebreaker generation disabled by config.")
+
 
         # If no person links found, also analyze homepage as fallback
         target_pages = [site_url] + person_links if person_links else [site_url]
@@ -1406,4 +1399,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
